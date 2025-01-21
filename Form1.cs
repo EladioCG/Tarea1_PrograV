@@ -12,6 +12,8 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.IO;
 using System.Configuration;
+using MongoDB.Driver;
+using MongoDB.Bson;
 
 namespace Tarea
 {
@@ -25,11 +27,26 @@ namespace Tarea
         private FileSystemWatcher fileWatcher;
         private string serverIP = ConfigurationManager.AppSettings["ServerIP"];
         private int serverPort = int.Parse(ConfigurationManager.AppSettings["ServerPort"]);
+        private IMongoCollection<BsonDocument> bitacoraCollection;
         public Form1()
         {
             InitializeComponent();
+            ConfigurarMongoDB();
         }
-
+        private void ConfigurarMongoDB()
+        {
+            try
+            {
+                // Conexión a MongoDB
+                var mongoClient = new MongoClient("mongodb://localhost:27017");
+                var database = mongoClient.GetDatabase("Tarea1Theavengers");
+                bitacoraCollection = database.GetCollection<BsonDocument>("Bitacora");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al conectar con MongoDB: {ex.Message}");
+            }
+        }
         private void btnSincronizar_Click(object sender, EventArgs e)
         {
             if (isRunning)
@@ -114,7 +131,7 @@ namespace Tarea
                     string respuesta = "Operacion procesada";
                     byte[] respuestabytes = Encoding.UTF8.GetBytes(respuesta);
                     stream.Write(respuestabytes, 0, respuestabytes.Length);
-                }                
+                }
             }
             catch (Exception ex)
             {
@@ -181,7 +198,7 @@ namespace Tarea
             };
 
             string[] archivos = Directory.GetFiles(rutaCarpeta);
-            foreach(var archivo in archivos)
+            foreach (var archivo in archivos)
             {
                 EnviarArchivo(archivo);
             }
@@ -199,25 +216,48 @@ namespace Tarea
             };
 
         }
+        private void RegistrarEnBitacora(string descripcion, string extension = null)
+        {
+            try
+            {
+                var documento = new BsonDocument
+                {
+                    { "Equipo", Environment.MachineName },
+                    { "Fecha", DateTime.UtcNow.ToString("o") },
+                    { "Descripcion", descripcion },
+                };
+
+                bitacoraCollection.InsertOne(documento);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al registrar en la bitácora: {ex.Message}");
+            }
+        }
         private void EnviarArchivo(string rutaArchivo)
         {
             try
             {
                 using (TcpClient cliente = new TcpClient(serverIP, serverPort))
-                using (NetworkStream Stream = cliente.GetStream())
+                using (NetworkStream stream = cliente.GetStream())
                 {
                     byte[] nombreArchivo = Encoding.UTF8.GetBytes(Path.GetFileName(rutaArchivo));
-                    Stream.Write(nombreArchivo, 0, nombreArchivo.Length);
+                    stream.Write(nombreArchivo, 0, nombreArchivo.Length);
 
                     // Enviar el archivo
-                    EnviarArchivoAlServidor(rutaArchivo, Stream);
-                }                
+                    EnviarArchivoAlServidor(rutaArchivo, stream);
+
+                    // Registrar en la bitácora
+                    RegistrarEnBitacora($"Se ha agregado el nuevo archivo {Path.GetFileName(rutaArchivo)}", Path.GetExtension(rutaArchivo));
+                }
             }
             catch (Exception ex)
             {
+                RegistrarEnBitacora($"Error al enviar archivo: {ex.Message}");
                 MessageBox.Show($"Error al enviar el archivo: {ex.Message}");
             }
         }
+
         private void EnviarNotificacionEliminacion(string nombreArchivo)
         {
             try
@@ -228,10 +268,14 @@ namespace Tarea
                     string mensaje = $"DELETE:{nombreArchivo}";
                     byte[] buffer = Encoding.UTF8.GetBytes(mensaje);
                     stream.Write(buffer, 0, buffer.Length);
+
+                    // Registrar en la bitácora
+                    RegistrarEnBitacora($"Archivo eliminado correctamente: {nombreArchivo}", Path.GetExtension(nombreArchivo));
                 }
             }
             catch (Exception ex)
             {
+                RegistrarEnBitacora($"Error al eliminar archivo: {ex.Message}");
                 MessageBox.Show($"Error al enviar notificación de eliminación: {ex.Message}");
             }
         }
@@ -249,21 +293,27 @@ namespace Tarea
         }
 
 
-        private void btnEnvio_Click(object sender, EventArgs e)
-        {
-            
-        }
-        
         private void RecibirArchivo(string rutaDestino, NetworkStream stream)
         {
-            byte[] buffer = new byte[1024];
-            using (FileStream fs = new FileStream(rutaDestino, FileMode.Create, FileAccess.Write))
+            try
             {
-                int bytesRead;
-                while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+                byte[] buffer = new byte[1024];
+                using (FileStream fs = new FileStream(rutaDestino, FileMode.Create, FileAccess.Write))
                 {
-                    fs.Write(buffer, 0, bytesRead);
+                    int bytesRead;
+                    while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        fs.Write(buffer, 0, bytesRead);
+                    }
                 }
+
+                // Registrar en la bitácora
+                RegistrarEnBitacora($"Archivo recibido correctamente: {Path.GetFileName(rutaDestino)}", Path.GetExtension(rutaDestino));
+            }
+            catch (Exception ex)
+            {
+                RegistrarEnBitacora($"Error al recibir archivo: {ex.Message}");
+                MessageBox.Show($"Error al recibir el archivo: {ex.Message}");
             }
         }
     }
